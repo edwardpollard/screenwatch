@@ -4,6 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Screenwatch — Movie & TV Lookup</title>
+<meta name="theme-color" content="#0a0a0f">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Screenwatch">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=Playfair+Display:wght@700;900&display=swap" rel="stylesheet">
 <style>
   :root {
@@ -617,8 +624,36 @@
   .browse-tabs {
     display: flex;
     gap: 0.4rem;
+    margin-bottom: 0.75rem;
+    flex-wrap: wrap;
+  }
+
+  .genre-filters {
+    display: flex;
+    gap: 0.35rem;
     margin-bottom: 1.25rem;
     flex-wrap: wrap;
+  }
+
+  .genre-filter-btn {
+    padding: 5px 12px;
+    border-radius: 16px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-muted);
+    font-family: inherit;
+    font-size: 0.75rem;
+    cursor: pointer;
+    transition: all 0.2s;
+    white-space: nowrap;
+  }
+
+  .genre-filter-btn:hover { border-color: var(--text-muted); color: var(--text); }
+  .genre-filter-btn.active {
+    background: var(--accent-dim);
+    border-color: var(--accent);
+    color: var(--accent);
+    font-weight: 500;
   }
 
   .browse-tab {
@@ -777,6 +812,7 @@
     <button class="browse-tab" onclick="switchBrowse('popular-movies', this)">Popular Movies</button>
     <button class="browse-tab" onclick="switchBrowse('popular-shows', this)">Popular Shows</button>
   </div>
+  <div class="genre-filters" id="genreFilters"></div>
   <div class="browse-grid" id="browseGrid">
     <div class="status-msg" style="grid-column:1/-1"><div class="spinner"></div><br>Loading trending…</div>
   </div>
@@ -825,6 +861,7 @@ let searchTimeout = null;
 let posterCache = {};
 let browseCache = {};
 let currentBrowse = 'trending-movies';
+let currentGenre = 'all';
 
 // ── Init ──
 document.addEventListener('DOMContentLoaded', () => {
@@ -1139,6 +1176,7 @@ const BROWSE_ENDPOINTS = {
 
 function switchBrowse(key, btn) {
   currentBrowse = key;
+  currentGenre = 'all';
   document.querySelectorAll('.browse-tab').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   loadBrowse(key);
@@ -1151,30 +1189,101 @@ async function loadBrowse(key) {
 
   // Use cache if available
   if (browseCache[key]) {
-    renderBrowseGrid(browseCache[key], key);
+    buildGenreFilters(browseCache[key], key);
+    filterAndRenderBrowse();
     return;
   }
 
   grid.innerHTML = '<div class="status-msg" style="grid-column:1/-1"><div class="spinner"></div><br>Loading…</div>';
+  document.getElementById('genreFilters').innerHTML = '';
 
   const endpoint = BROWSE_ENDPOINTS[key];
   try {
     const resp = await fetch(
-      `https://api.trakt.tv${endpoint}?extended=full&limit=20`,
+      `https://api.trakt.tv${endpoint}?extended=full&limit=40`,
       { headers: traktHeaders() }
     );
     if (!resp.ok) throw new Error(`API error: ${resp.status}`);
     const data = await resp.json();
     browseCache[key] = data;
-    renderBrowseGrid(data, key);
+    buildGenreFilters(data, key);
+    filterAndRenderBrowse();
   } catch (err) {
     grid.innerHTML = `<div class="status-msg" style="grid-column:1/-1"><span class="icon">&#9888;&#65039;</span>${escHtml(err.message)}</div>`;
   }
 }
 
+function buildGenreFilters(items, key) {
+  const isTrending = key.startsWith('trending-');
+  const type = key.includes('movie') ? 'movie' : 'show';
+
+  // Collect all genres from the data
+  const genreCounts = {};
+  items.forEach(item => {
+    const media = isTrending ? item[type] : item;
+    if (!media) return;
+    (media.genres || []).forEach(g => {
+      genreCounts[g] = (genreCounts[g] || 0) + 1;
+    });
+  });
+
+  // Sort by frequency, then alphabetically
+  const sorted = Object.entries(genreCounts)
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(e => e[0]);
+
+  const container = document.getElementById('genreFilters');
+  container.innerHTML = '';
+
+  // "All" button
+  const allBtn = document.createElement('button');
+  allBtn.className = 'genre-filter-btn active';
+  allBtn.textContent = 'All';
+  allBtn.onclick = () => selectGenre('all', allBtn);
+  container.appendChild(allBtn);
+
+  sorted.forEach(genre => {
+    const btn = document.createElement('button');
+    btn.className = 'genre-filter-btn';
+    btn.textContent = genre.charAt(0).toUpperCase() + genre.slice(1);
+    btn.onclick = () => selectGenre(genre, btn);
+    container.appendChild(btn);
+  });
+}
+
+function selectGenre(genre, btn) {
+  currentGenre = genre;
+  document.querySelectorAll('.genre-filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  filterAndRenderBrowse();
+}
+
+function filterAndRenderBrowse() {
+  const items = browseCache[currentBrowse];
+  if (!items) return;
+
+  const isTrending = currentBrowse.startsWith('trending-');
+  const type = currentBrowse.includes('movie') ? 'movie' : 'show';
+
+  let filtered = items;
+  if (currentGenre !== 'all') {
+    filtered = items.filter(item => {
+      const media = isTrending ? item[type] : item;
+      return media && (media.genres || []).includes(currentGenre);
+    });
+  }
+
+  renderBrowseGrid(filtered, currentBrowse);
+}
+
 function renderBrowseGrid(items, key) {
   const grid = document.getElementById('browseGrid');
   grid.innerHTML = '';
+
+  if (!items.length) {
+    grid.innerHTML = '<div class="status-msg" style="grid-column:1/-1"><span class="icon">&#128533;</span>No titles match this genre</div>';
+    return;
+  }
 
   const isTrending = key.startsWith('trending-');
   const type = key.includes('movie') ? 'movie' : 'show';
